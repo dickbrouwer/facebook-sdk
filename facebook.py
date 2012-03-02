@@ -33,30 +33,18 @@ usage of this module might look like this:
 
 """
 
-import cgi
-import time
 import urllib
 import urllib2
 import hashlib
 import hmac
 import base64
-import logging
-
-# Find a JSON parser
-try:
-    import simplejson as json
-except ImportError:
-    try:
-        from django.utils import simplejson as json
-    except ImportError:
-        import json
+import requests
+from urlparse import parse_qs
+import simplejson as json
 _parse_json = json.loads
 
-# Find a query string parser
-try:
-    from urlparse import parse_qs
-except ImportError:
-    from cgi import parse_qs
+# Set the default number of retries for the requests library
+requests.defaults.defaults['max_retries'] = 3
 
 
 class GraphAPI(object):
@@ -172,74 +160,24 @@ class GraphAPI(object):
         an album for your application.
         """
         object_id = album_id or "me"
-        #it would have been nice to reuse self.request;
-        #but multipart is messy in urllib
-        post_args = {
-                  'access_token': self.access_token,
-                  'source': image,
-                  'message': message
-        }
-        post_args.update(kwargs)
-        content_type, body = self._encode_multipart_form(post_args)
-        req = urllib2.Request(("https://graph.facebook.com/%s/photos" %
-                               object_id),
-                              data=body)
-        req.add_header('Content-Type', content_type)
+        url = "https://graph.facebook.com/%s/photos" % object_id
+
+        response = requests.post(url, files={'source': image}, data={
+                'message': message,
+                'access_token': self.access_token
+            }
+        )
         try:
-            data = urllib2.urlopen(req).read()
-        #For Python 3 use this:
-        #except urllib2.HTTPError as e:
-        except urllib2.HTTPError, e:
-            data = e.read()  # Facebook sends OAuth errors as 400, and urllib2
-                             # throws an exception, we want a GraphAPIError
-        try:
-            response = _parse_json(data)
-            # Raise an error if we got one, but don't not if Facebook just
-            # gave us a Bool value
-            if (response and isinstance(response, dict) and
-                response.get("error")):
-                raise GraphAPIError(response["error"].get("code", 1),
-                                    response["error"]["message"])
+            data = _parse_json(response.content)
         except ValueError:
-            response = data
+            data = response.content
 
-        return response
+        if response.status_code == 400:
+            # Facebook sends OAuth errors as 400 we want a GraphAPIError
+            raise GraphAPIError(data["error"].get("code", 1),
+                                data["error"]["message"])
 
-    # based on: http://code.activestate.com/recipes/146306/
-    def _encode_multipart_form(self, fields):
-        """Fields are a dict of form name-> value
-        For files, value should be a file object.
-        Other file-like objects might work and a fake name will be chosen.
-        Return (content_type, body) ready for httplib.HTTP instance
-        """
-        BOUNDARY = '----------ThIs_Is_tHe_bouNdaRY_$'
-        CRLF = '\r\n'
-        L = []
-        for (key, value) in fields.items():
-            logging.debug("Encoding %s, (%s)%s" % (key, type(value), value))
-            if not value:
-                continue
-            L.append('--' + BOUNDARY)
-            if hasattr(value, 'read') and callable(value.read):
-                filename = getattr(value, 'name', '%s.jpg' % key)
-                L.append(('Content-Disposition: form-data;'
-                          'name="%s";'
-                          'filename="%s"') % (key, filename))
-                L.append('Content-Type: image/jpeg')
-                value = value.read()
-                logging.debug(type(value))
-            else:
-                L.append('Content-Disposition: form-data; name="%s"' % key)
-            L.append('')
-            if isinstance(value, unicode):
-                logging.debug("Convert to ascii")
-                value = value.encode('ascii')
-            L.append(value)
-        L.append('--' + BOUNDARY + '--')
-        L.append('')
-        body = CRLF.join(L)
-        content_type = 'multipart/form-data; boundary=%s' % BOUNDARY
-        return content_type, body
+        return data
 
     def request(self, path, args=None, post_args=None):
         """Fetches the given path in the Graph API.
