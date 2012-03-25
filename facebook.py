@@ -436,3 +436,29 @@ def get_app_access_token(app_id, app_secret):
         file.close()
 
     return result
+
+def extend_access_token(self, app_id, app_secret):
+    """
+    Extends the expiration time of a valid OAuth access token. See
+    <https://developers.facebook.com/roadmap/offline-access-removal/
+    #extend_token>
+
+    """
+    args = {
+        "client_id": app_id,
+        "client_secret": app_secret,
+        "grant_type": "fb_exchange_token",
+        "fb_exchange_token": self.access_token,
+    }
+    response = urllib.urlopen("https://graph.facebook.com/oauth/"
+                        "access_token?" + urllib.urlencode(args)).read()
+    query_str = parse_qs(response)
+    if "access_token" in query_str:
+        result = {"access_token": query_str["access_token"][0]}
+        if "expires" in query_str:
+            result["expires"] = query_str["expires"][0]
+        return result
+    else:
+        response = json.loads(response)
+        raise GraphAPIError(response["error"]["type"],
+                            response["error"]["message"])
